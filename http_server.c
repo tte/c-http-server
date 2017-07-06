@@ -17,7 +17,6 @@
 #define PORT "3001"
 #define CONNECTION_POOL 10
 #define REQUEST_BUFFER_SIZE 500
-#define BASE_PATH "/Users/tte/labs/c/beej/"
 
 
 void sigchld_handler(int s)
@@ -89,7 +88,41 @@ void error_response(int fd, int code, char *msg)
   response(fd, string);
 }
 
-void request_handler(int new_fd)
+int get_path_from_request(char *ptr, char *path)
+{
+  // Routing
+  char *index_route = "/";
+  if(strcmp(&ptr[0], index_route) == 0) {
+    strncpy(path, "index.html", 10);
+  } else {
+    regex_t regex;
+    int reti;
+    char *pattern = "/\\(.*\\.[a-zA-Z0-9]\\{1,4\\}\\)";
+    size_t nmatch = 2;
+    regmatch_t pmatch[2];
+
+    reti = regcomp(&regex, pattern, 0);
+    if(reti != 0) {
+      regfree(&regex);
+      return 1;
+    }
+
+    reti = regexec(&regex, ptr, nmatch, pmatch, 0);
+    if(reti) {
+      printf("Can't parse URI. Failed to match '%s' with '%s',returning %d.\n", ptr, pattern, reti);
+      regfree(&regex);
+      return 2; 
+    }
+
+    ptr = &ptr[pmatch[1].rm_so];
+    strncpy(path, &ptr[pmatch[1].rm_so - 1], (int)(pmatch[1].rm_eo - pmatch[1].rm_so));
+    regfree(&regex);
+
+    return 0;
+  }
+}
+
+void request_handler(int new_fd, char *base_path)
 {
   char request[REQUEST_BUFFER_SIZE];
 
@@ -122,40 +155,20 @@ void request_handler(int new_fd)
   // Routing
   char *path[50];
   memset(path, '\0', sizeof(path));
-  char *resource[500];
-  printf("%s", &ptr[0]);
-  char *index_route = "/";
-  if(strcmp(&ptr[0], index_route) == 0) {
-    strcat(ptr,"index.html");
-    strncpy(path,"index.html", 10);
-  } else {
-    regex_t regex;
-    int reti;
-    char *pattern = "/\\(.*\\.[a-zA-Z0-9]\\{1,4\\}\\)";
-    size_t nmatch = 2;
-    regmatch_t pmatch[2];
-
-    reti = regcomp(&regex, pattern, 0);
-    if(reti != 0) {
-      regfree(&regex);
-      error_response(new_fd, 500, "Internal Server Error");
+  int pr;
+  if((pr = get_path_from_request(ptr, path)) != 0) {
+    switch(pr) {
+      case 2:
+        error_response(new_fd, 400, "Bad Request");
+      case 1:
+      default:
+        error_response(new_fd, 500, "Internal Server Error");
     }
-
-    reti = regexec(&regex, ptr, nmatch, pmatch, 0);
-    if(reti) {
-      printf("Can't parse URI. Failed to match '%s' with '%s',returning %d.\n", ptr, pattern, reti);
-      regfree(&regex);
-      error_response(new_fd, 400, "Bad Request");
-    }
-
-    ptr = &ptr[pmatch[1].rm_so];
-    strncpy(path, &ptr[pmatch[1].rm_so - 1], (int)(pmatch[1].rm_eo - pmatch[1].rm_so));
-    regfree(&regex);
   }
-
   printf("path is %s with length %lu\n", path, strlen(path));
 
-  strcpy(resource, BASE_PATH);
+  char *resource[500];
+  strcpy(resource, base_path);
   strcat(resource, path);
   int fd_res;
   fd_res = open(resource, O_RDONLY, 0);
@@ -173,10 +186,10 @@ void request_handler(int new_fd)
     printf("File length is %d\n", length);
 
     if(length == -1 ) {
-      printf("Error getting size \n");
+      printf("Error getting size of file \n");
     }
     if((ptr = (char *)malloc(length)) == NULL) {
-      printf("Error allocating memory!!\n");
+      printf("Error allocating memory during file reading\n");
     }
     read(fd_res, ptr, length);
 
@@ -185,7 +198,6 @@ void request_handler(int new_fd)
     sprintf(hd_cl, "Content-length: %d\n", length);
     response(new_fd, hd_cl);
     response(new_fd, "Content-Type: text/html\n\n");
-    // response(new_fd, body);
     if(send(new_fd, ptr, length, 0) == -1) {
       printf("There are an error during sending GOD DAMN FILE\n");
     }
@@ -199,6 +211,12 @@ void request_handler(int new_fd)
 
 int main(void)
 {
+  char *base_path;
+  if((base_path = getenv("BASE_PATH")) == NULL) {
+    printf("Missing `BASE_PATH` env.\n");
+    exit(0);
+  }
+
   int sockfd, new_fd; // listen on sock_fd, new connection on new_fd
   struct addrinfo hints, *serverinfo, *p;
   struct sockaddr_storage their_addr; // connector's address information
@@ -274,7 +292,7 @@ int main(void)
     if(!fork()) {
       close(sockfd); // child doesn't need the listener
 
-      request_handler(new_fd);
+      request_handler(new_fd, base_path);
     }
 
     close(new_fd);

@@ -9,11 +9,16 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <regex.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
 
 #define PORT "3001"
-#define CONNECTION_POOL 10 // how many pending connections queue will hold
+#define CONNECTION_POOL 10
 #define REQUEST_BUFFER_SIZE 500
-#define BASE_PATH "/Users/tte/labs/c/beej"
+#define BASE_PATH "/Users/tte/labs/c/beej/"
+
 
 void sigchld_handler(int s)
 {
@@ -58,7 +63,7 @@ int read_request(int fd, char *buffer)
   }
 
   return 0;
-} 
+}
 
 void error(int fd, char *msg)
 {
@@ -75,6 +80,15 @@ void response(int fd, char *msg)
   }
 }
 
+void error_response(int fd, int code, char *msg)
+{
+  perror(msg);
+
+  char *string;
+  sprintf(string, "HTTP/1.1 %d %s\r\n", code, msg);
+  response(fd, string);
+}
+
 void request_handler(int new_fd)
 {
   char request[REQUEST_BUFFER_SIZE];
@@ -83,8 +97,10 @@ void request_handler(int new_fd)
     perror("Can't read request\n");
   }
 
+  printf("Request head:\n%s\n", request);
+
   char *ptr;
-  ptr = strstr(request, "HTTP/");
+  ptr = strstr(request, " HTTP/");
 
   if(ptr == NULL) {
     error(new_fd, "Invalid http request\n");
@@ -98,19 +114,84 @@ void request_handler(int new_fd)
   }
 
   if(ptr == NULL) {
-    error(new_fd, "Request method is unsupported. Please, use `GET` only.\n");
+    error(new_fd, "Requested resource is unsupported.\n");
   }
 
-  printf("request:\n%s\n", request);
+  printf("URI:\n%s\n", ptr);
 
-  char *body, hd_content_ln[50]; 
-  body = "<html><body><H1>Here we are</H1></body></html>";
-  sprintf(hd_content_ln, "Content-length: %d\n", (int)strlen(body));
+  // Routing
+  char *path[50];
+  memset(path, '\0', sizeof(path));
+  char *resource[500];
+  printf("%s", &ptr[0]);
+  char *index_route = "/";
+  if(strcmp(&ptr[0], index_route) == 0) {
+    strcat(ptr,"index.html");
+    strncpy(path,"index.html", 10);
+  } else {
+    regex_t regex;
+    int reti;
+    char *pattern = "/\\(.*\\.[a-zA-Z0-9]\\{1,4\\}\\)";
+    size_t nmatch = 2;
+    regmatch_t pmatch[2];
 
-  response(new_fd, "HTTP/1.1 200 OK\n");
-  response(new_fd, hd_content_ln);
-  response(new_fd, "Content-Type: text/html\n\n");
-  response(new_fd, body);
+    reti = regcomp(&regex, pattern, 0);
+    if(reti != 0) {
+      regfree(&regex);
+      error_response(new_fd, 500, "Internal Server Error");
+    }
+
+    reti = regexec(&regex, ptr, nmatch, pmatch, 0);
+    if(reti) {
+      printf("Can't parse URI. Failed to match '%s' with '%s',returning %d.\n", ptr, pattern, reti);
+      regfree(&regex);
+      error_response(new_fd, 400, "Bad Request");
+    }
+
+    ptr = &ptr[pmatch[1].rm_so];
+    strncpy(path, &ptr[pmatch[1].rm_so - 1], (int)(pmatch[1].rm_eo - pmatch[1].rm_so));
+    regfree(&regex);
+  }
+
+  printf("path is %s with length %lu\n", path, strlen(path));
+
+  strcpy(resource, BASE_PATH);
+  strcat(resource, path);
+  int fd_res;
+  fd_res = open(resource, O_RDONLY, 0);
+  printf("Opening \"%s\"\n",resource);
+  if(fd_res == -1) {
+    printf("404 File not found Error\n");
+    error_response(new_fd, 404, "Not Found");
+  } else {
+    printf("File found - processing...\n");
+
+    int length;
+    struct stat st;
+    stat(resource, &st);
+    length = st.st_size;
+    printf("File length is %d\n", length);
+
+    if(length == -1 ) {
+      printf("Error getting size \n");
+    }
+    if((ptr = (char *)malloc(length)) == NULL) {
+      printf("Error allocating memory!!\n");
+    }
+    read(fd_res, ptr, length);
+
+    response(new_fd, "HTTP/1.1 200 OK\n");
+    char *hd_cl[50];
+    sprintf(hd_cl, "Content-length: %d\n", length);
+    response(new_fd, hd_cl);
+    response(new_fd, "Content-Type: text/html\n\n");
+    // response(new_fd, body);
+    if(send(new_fd, ptr, length, 0) == -1) {
+      printf("There are an error during sending GOD DAMN FILE\n");
+    }
+    free(ptr);
+    close(fd_res);
+  }
 
   close(new_fd);
   exit(0);

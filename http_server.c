@@ -88,7 +88,7 @@ void error_response(int fd, int code, char *msg)
   response(fd, string);
 }
 
-int get_path_from_request(char *ptr, char *path)
+int get_path_from_request(char *ptr, char *path[])
 {
   // Routing
   char *index_route = "/";
@@ -118,8 +118,8 @@ int get_path_from_request(char *ptr, char *path)
     strncpy(path, &ptr[pmatch[1].rm_so - 1], (int)(pmatch[1].rm_eo - pmatch[1].rm_so));
     regfree(&regex);
 
-    return 0;
   }
+  return 0;
 }
 
 void request_handler(int new_fd, char *base_path)

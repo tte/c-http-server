@@ -14,9 +14,16 @@
 #include <sys/stat.h>
 
 
+#if !defined (BASE_PATH)
+  #define BASE_PATH "./"
+#endif
 #define PORT "3001"
 #define CONNECTION_POOL 10
-#define REQUEST_BUFFER_SIZE 500
+#define REQUEST_BUFFER_SIZE 2048
+#define RESOURCE_BUFFER_SIZE 512
+#define REQUEST_READ_SIZE 128
+#define EOL "\r\n"
+#define EOL_SIZE 2
 
 
 void sigchld_handler(int s)
@@ -41,13 +48,10 @@ void *get_in_addr(struct sockaddr *sa)
 
 int read_request(int fd, char *buffer)
 {
-  #define EOL "\r\n"
-  #define EOL_SIZE 2
-
   char *p = buffer;
   int eol_matched = 0;
 
-  while(recv(fd, p, 1, 0) != 0) {
+  while(recv(fd, p, REQUEST_READ_SIZE, 0) != 0) {
     if(*p == EOL[eol_matched]) {
       ++eol_matched;
 
@@ -68,7 +72,7 @@ void error(int fd, char *msg)
 {
   perror(msg);
   close(fd);
-  exit(0);
+  exit(1);
 }
 
 void response(int fd, char *msg)
@@ -122,12 +126,12 @@ int get_path_from_request(char *ptr, char *path[])
   return 0;
 }
 
-void request_handler(int new_fd, char *base_path)
+void request_handler(int new_fd)
 {
   char request[REQUEST_BUFFER_SIZE];
 
   if(read_request(new_fd, request) == 0) {
-    perror("Can't read request\n");
+    error(new_fd, "Can't read request\n");
   }
 
   printf("Request head:\n%s\n", request);
@@ -167,8 +171,8 @@ void request_handler(int new_fd, char *base_path)
   }
   printf("path is %s with length %lu\n", path, strlen(path));
 
-  char *resource[500];
-  strcpy(resource, base_path);
+  char *resource[RESOURCE_BUFFER_SIZE];
+  strcpy(resource, BASE_PATH);
   strcat(resource, path);
   int fd_res;
   fd_res = open(resource, O_RDONLY, 0);
@@ -211,11 +215,11 @@ void request_handler(int new_fd, char *base_path)
 
 int main(void)
 {
-  char *base_path;
-  if((base_path = getenv("BASE_PATH")) == NULL) {
-    printf("Missing `BASE_PATH` env.\n");
-    exit(0);
-  }
+  // char *base_path;
+  // if((base_path = getenv("BASE_PATH")) == NULL) {
+  //   printf("Missing `BASE_PATH` env.\n");
+  //   exit(1);
+  // }
 
   int sockfd, new_fd; // listen on sock_fd, new connection on new_fd
   struct addrinfo hints, *serverinfo, *p;
@@ -292,7 +296,7 @@ int main(void)
     if(!fork()) {
       close(sockfd); // child doesn't need the listener
 
-      request_handler(new_fd, base_path);
+      request_handler(new_fd);
     }
 
     close(new_fd);

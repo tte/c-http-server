@@ -14,9 +14,7 @@
 #include <sys/stat.h>
 
 
-#if !defined (BASE_PATH)
-  #define BASE_PATH "./"
-#endif
+#define BASE_PATH "./"
 #define PORT "3001"
 #define CONNECTION_POOL 10
 #define REQUEST_BUFFER_SIZE 2048
@@ -71,7 +69,9 @@ int read_request(int fd, char *buffer)
 void error(int fd, char *msg)
 {
   perror(msg);
-  close(fd);
+  if(fd != -1 ) {
+    close(fd);
+  }
   exit(1);
 }
 
@@ -215,12 +215,6 @@ void request_handler(int new_fd)
 
 int main(void)
 {
-  // char *base_path;
-  // if((base_path = getenv("BASE_PATH")) == NULL) {
-  //   printf("Missing `BASE_PATH` env.\n");
-  //   exit(1);
-  // }
-
   int sockfd, new_fd; // listen on sock_fd, new connection on new_fd
   struct addrinfo hints, *serverinfo, *p;
   struct sockaddr_storage their_addr; // connector's address information
@@ -236,8 +230,9 @@ int main(void)
   hints.ai_flags = AI_PASSIVE;
 
   if((rv = getaddrinfo(NULL, PORT, &hints, &serverinfo)) != 0) {
-    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-    return 1;
+    char *str;
+    sprintf(str, "getaddrinfo: %s\n", gai_strerror(rv));
+    error(-1, str);
   }
 
   for(p = serverinfo; p != NULL; p = p->ai_next) {
@@ -247,13 +242,11 @@ int main(void)
     }
 
     if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-      perror("setsockopt");
-      exit(1);
+      error(-1, "setsockopt");
     }
 
     if(bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-      close(sockfd);
-      perror("server: bind");
+      error(sockfd, "server: bind");
       continue;
     }
 
@@ -263,30 +256,28 @@ int main(void)
   freeaddrinfo(serverinfo); // all done with this structure
 
   if(p == NULL) {
-    fprintf(stderr, "server: failed to bind\n");
-    exit(1);
+    error(-1, "server: failed to bind\n");
   }
 
   if(listen(sockfd, CONNECTION_POOL) == -1) {
-    perror("listen");
-    exit(1);
+    error(-1, "server: failed to listen\n");
   }
 
   sa.sa_handler = sigchld_handler; // reap all dead processes
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
   if(sigaction(SIGCHLD, &sa, NULL) == -1) {
-    perror("sigaction");
-    exit(1);
+    error(-1, "server: failed to set sigaction\n");
   }
 
   printf("server: waiting for connections...\n");
 
-  while(1) { // main accept loop
+  // main accept loop
+  while(1) {
     sin_size = sizeof their_addr;
     new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
     if(new_fd == -1) {
-      perror("accept");
+      printf("server: can't accept some request\n");
       continue;
     }
 
@@ -295,7 +286,6 @@ int main(void)
 
     if(!fork()) {
       close(sockfd); // child doesn't need the listener
-
       request_handler(new_fd);
     }
 
